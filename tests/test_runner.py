@@ -242,3 +242,57 @@ class TestFetchWithProxy:
             extra={"proxy": "http://explicit-proxy:8080"},
         )
         assert captured["kwargs"]["proxy"] == "http://explicit-proxy:8080"
+
+
+class TestMarkdownOutput:
+    def test_fetch_html_defaults_to_markdown_content(self, monkeypatch, fake_response):
+        """fetch_html returns markdown in content by default."""
+        fake_resp = fake_response("<html><body><p>Hello <b>world</b></p></body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def get(url, **kwargs):
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        # FakeResponse isn't a real Selector → Convertor path falls back to
+        # get_all_text, so content should contain the text.
+        result = fetch_html("https://example.com", mode="static", timeout_ms=30000)
+        assert result["content"]  # non-empty
+        assert "Hello" in result["content"]
+        assert "html" in result
+        assert "markdown" in result
+
+    def test_fetch_html_output_format_html(self, monkeypatch, fake_response):
+        fake_resp = fake_response("<html><body><p>Hi</p></body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def get(url, **kwargs):
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        result = fetch_html(
+            "https://example.com", mode="static", timeout_ms=30000,
+            output_format="html",
+        )
+        assert "<html>" in result["content"]
+
+    def test_fetch_html_output_format_text(self, monkeypatch, fake_response):
+        fake_resp = fake_response("<html><body><p>Hi</p></body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def get(url, **kwargs):
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        result = fetch_html(
+            "https://example.com", mode="static", timeout_ms=30000,
+            output_format="text",
+        )
+        assert "Hi" in result["content"]
+        assert "<" not in result["content"] or "Hi" in result["content"]

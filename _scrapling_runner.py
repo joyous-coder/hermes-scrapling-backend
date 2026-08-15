@@ -147,6 +147,7 @@ def fetch_html(
     timeout_ms: int = 30000,
     css_selector: Optional[str] = None,
     wait_selector: Optional[str] = None,
+    output_format: str = "markdown",
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Fetch a URL and return in-memory content.
@@ -158,9 +159,16 @@ def fetch_html(
             "mode": str,
             "html": str,          # full HTML (or selector-matched HTML)
             "text": str,          # extracted text (or selector-matched text)
+            "markdown": str,      # markdown conversion (or selector-matched)
+            "content": str,       # the primary content in output_format
             "status": int|None,   # HTTP status if available
             "title": str,         # <title> if available
         }
+
+    ``output_format`` is one of "markdown" | "html" | "text" and decides
+    what ``content`` holds. Markdown uses scrapling's own Convertor
+    (the same path as the CLI's ``--ai-targeted``: body-only, noise
+    stripped, hidden/prompt-injection elements removed) via markdownify.
 
     Raises RuntimeError on any fetch failure — callers convert to the
     hermes tool_error / per-URL error shape.
@@ -214,22 +222,70 @@ def fetch_html(
     except Exception:
         title = ""
 
+    # Convert to the requested output format. The scrapling Response IS a
+    # Selector, so Convertor._extract_content works directly on it.
+    markdown = ""
     if css_selector:
         try:
             matched = response.css(css_selector)
             html = "\n".join(str(el) for el in matched)
             text = "\n".join(el.get_all_text() for el in matched)
+            markdown = _convert_to_markdown(matched)
         except Exception as exc:
             logger.warning("css_selector %r failed: %s", css_selector, exc)
             text = response.get_all_text() if response is not None else ""
+            markdown = _convert_to_markdown([response])
     else:
         text = response.get_all_text() if response is not None else ""
+        markdown = _convert_to_markdown([response])
+
+    if output_format == "html":
+        content = html
+    elif output_format == "text":
+        content = text
+    else:  # markdown (default)
+        content = markdown or text or html
 
     return {
         "url": url,
         "mode": mode,
         "html": html,
         "text": text,
+        "markdown": markdown,
+        "content": content,
         "status": status,
         "title": title,
     }
+
+
+def _convert_to_markdown(elements: list) -> str:
+    """Convert scrapling Selector elements to markdown (official path).
+
+    Mirrors the scrapling CLI's ``--ai-targeted`` markdown output: uses
+    ``scrapling.core.shell.Convertor._extract_content`` with
+    ``extraction_type="markdown"`` and ``main_content_only=True`` (the
+    same body-only + noise-strip + hidden-element sanitize pipeline).
+    Falls back to plain text if conversion fails.
+    """
+    try:
+        from scrapling.core.shell import Convertor
+
+        parts = []
+        for el in elements:
+            try:
+                pages = Convertor._extract_content(
+                    el,
+                    extraction_type="markdown",
+                    main_content_only=True,
+                )
+                parts.append("\n".join(pages))
+            except Exception:
+                # Fallback: plain text for this element.
+                try:
+                    parts.append(el.get_all_text())
+                except Exception:
+                    parts.append("")
+        return "\n\n".join(parts)
+    except Exception as exc:
+        logger.warning("markdown conversion failed: %s", exc)
+        return ""

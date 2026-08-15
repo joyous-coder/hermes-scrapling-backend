@@ -93,11 +93,15 @@ class ScraplingExtractProvider(WebSearchProvider):
                 )
                 continue
 
-            # Prefer clean text; fall back to HTML when asked for html.
+            # Format mapping: hermes expects clean markdown/text from the
+            # provider's raw_content/content. We produce markdown by default
+            # (scrapling's own --ai-targeted path); html only when asked.
             if format_hint in ("html", "raw"):
                 content = fetched["html"]
-            else:
-                content = fetched["text"] or fetched["html"]
+            elif format_hint == "text":
+                content = fetched["text"] or fetched["markdown"] or fetched["html"]
+            else:  # markdown (default — hermes web_extract contract)
+                content = fetched["markdown"] or fetched["text"] or fetched["html"]
 
             if max_chars and isinstance(max_chars, int) and len(content) > max_chars:
                 content = content[:max_chars]
@@ -107,10 +111,15 @@ class ScraplingExtractProvider(WebSearchProvider):
                     "url": fetched["url"],
                     "title": fetched["title"],
                     "content": content,
-                    "raw_content": fetched["html"] if include_raw else "",
+                    "raw_content": (
+                        fetched["markdown"] or fetched["text"] or fetched["html"]
+                        if include_raw
+                        else ""
+                    ),
                     "metadata": {
                         "status": fetched["status"],
                         "mode": fetched["mode"],
+                        "output_format": "markdown" if format_hint not in ("html", "text") else format_hint,
                     },
                 }
             )

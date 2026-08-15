@@ -76,8 +76,8 @@ WEB_EXTRACT_DEEP_SCHEMA: Dict[str, Any] = {
             "output_format": {
                 "type": "string",
                 "enum": ["html", "markdown", "text"],
-                "default": "html",
-                "description": "Output format: html (raw HTML), text (extracted text), or markdown (best-effort text).",
+                "default": "markdown",
+                "description": "Output format: markdown (default, clean & token-efficient), html (raw HTML), or text (extracted text).",
             },
         },
         "required": ["url"],
@@ -122,10 +122,12 @@ async def _handle_web_extract_deep(args: Dict[str, Any], **kwargs: Any) -> str:
         logger.warning("web_extract_deep failed for %s: %s", url, exc)
         return tool_error(f"web_extract_deep failed: {exc}")
 
-    if output_format == "text":
-        content = fetched["text"] or fetched["html"]
-    else:  # html / markdown (markdown falls back to text/html best-effort)
+    if output_format == "html":
         content = fetched["html"]
+    elif output_format == "text":
+        content = fetched["text"] or fetched["markdown"] or fetched["html"]
+    else:  # markdown (default)
+        content = fetched["markdown"] or fetched["text"] or fetched["html"]
 
     payload = {
         "success": True,

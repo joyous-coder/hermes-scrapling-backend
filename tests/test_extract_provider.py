@@ -49,8 +49,11 @@ class TestScraplingExtractProvider:
         assert r["url"] == "https://quotes.toscrape.com/"
         assert r["title"] == "Quotes"
         assert "Hello world" in r["content"]
-        assert "<html>" in r["raw_content"]
+        # raw_content is now markdown (clean text), not raw HTML
+        assert "<html>" not in r["raw_content"]
+        assert "Hello world" in r["raw_content"]
         assert r["metadata"]["status"] == 200
+        assert r["metadata"]["output_format"] == "markdown"
 
     def test_extract_per_url_error(self, monkeypatch):
         class FakeFetcher:
