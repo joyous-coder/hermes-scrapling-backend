@@ -119,3 +119,126 @@ class TestFetchHtml:
 
         with pytest.raises(RuntimeError, match="boom"):
             fetch_html("https://example.com", mode="static", timeout_ms=30000)
+
+class TestProxyConfig:
+    def test_no_proxy_default(self, monkeypatch):
+        from _scrapling_runner import clear_proxy_cache, get_proxy_config
+
+        monkeypatch.delenv("EXTRACT_PROXY", raising=False)
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        clear_proxy_cache()
+        assert get_proxy_config() == ("", None)
+
+    def test_proxy_from_env(self, monkeypatch):
+        from _scrapling_runner import clear_proxy_cache, get_proxy_config
+
+        monkeypatch.setenv("EXTRACT_PROXY", "http://127.0.0.1:7890")
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        clear_proxy_cache()
+        proxy, auth = get_proxy_config()
+        assert proxy == "http://127.0.0.1:7890"
+        assert auth is None
+
+    def test_proxy_with_inline_auth(self, monkeypatch):
+        from _scrapling_runner import clear_proxy_cache, get_proxy_config
+
+        monkeypatch.setenv("EXTRACT_PROXY", "http://user:pass@127.0.0.1:7890")
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        clear_proxy_cache()
+        proxy, auth = get_proxy_config()
+        assert proxy == "http://user:pass@127.0.0.1:7890"
+        assert auth == ("user", "pass")
+
+    def test_proxy_auth_separate_env(self, monkeypatch):
+        from _scrapling_runner import clear_proxy_cache, get_proxy_config
+
+        monkeypatch.setenv("EXTRACT_PROXY", "http://127.0.0.1:7890")
+        monkeypatch.setenv("EXTRACT_PROXY_AUTH", "user:pass")
+        clear_proxy_cache()
+        proxy, auth = get_proxy_config()
+        assert proxy == "http://127.0.0.1:7890"
+        assert auth == ("user", "pass")
+
+
+class TestFetchWithProxy:
+    def test_static_passes_proxy_and_auth(self, monkeypatch, fake_response):
+        """With EXTRACT_PROXY set, static fetch passes proxy + proxy_auth."""
+        captured = {}
+        fake_resp = fake_response("<html><body>ok</body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def get(url, **kwargs):
+                captured["kwargs"] = kwargs
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        monkeypatch.setenv("EXTRACT_PROXY", "http://user:pass@127.0.0.1:7890")
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        _runner_mod.clear_proxy_cache()
+
+        fetch_html("https://example.com", mode="static", timeout_ms=30000)
+        assert captured["kwargs"]["proxy"] == "http://user:pass@127.0.0.1:7890"
+        assert captured["kwargs"]["proxy_auth"] == ("user", "pass")
+
+    def test_dynamic_passes_proxy(self, monkeypatch, fake_response):
+        captured = {}
+        fake_resp = fake_response("<html><body>ok</body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def fetch(url, **kwargs):
+                captured["kwargs"] = kwargs
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        monkeypatch.setenv("EXTRACT_PROXY", "http://127.0.0.1:7890")
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        _runner_mod.clear_proxy_cache()
+
+        fetch_html("https://example.com", mode="dynamic", timeout_ms=30000)
+        assert captured["kwargs"]["proxy"] == "http://127.0.0.1:7890"
+
+    def test_no_proxy_no_kwargs(self, monkeypatch, fake_response):
+        captured = {}
+        fake_resp = fake_response("<html><body>ok</body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def get(url, **kwargs):
+                captured["kwargs"] = kwargs
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        monkeypatch.delenv("EXTRACT_PROXY", raising=False)
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        _runner_mod.clear_proxy_cache()
+
+        fetch_html("https://example.com", mode="static", timeout_ms=30000)
+        assert "proxy" not in captured["kwargs"]
+        assert "proxy_auth" not in captured["kwargs"]
+
+    def test_explicit_extra_proxy_wins(self, monkeypatch, fake_response):
+        captured = {}
+        fake_resp = fake_response("<html><body>ok</body></html>", status=200)
+
+        class FakeFetcher:
+            @staticmethod
+            def get(url, **kwargs):
+                captured["kwargs"] = kwargs
+                return fake_resp
+
+        import _scrapling_runner as _runner_mod
+        monkeypatch.setattr(_runner_mod, "_import_fetcher", lambda kind: FakeFetcher)
+        monkeypatch.setenv("EXTRACT_PROXY", "http://env-proxy:8080")
+        monkeypatch.delenv("EXTRACT_PROXY_AUTH", raising=False)
+        _runner_mod.clear_proxy_cache()
+
+        fetch_html(
+            "https://example.com", mode="static", timeout_ms=30000,
+            extra={"proxy": "http://explicit-proxy:8080"},
+        )
+        assert captured["kwargs"]["proxy"] == "http://explicit-proxy:8080"

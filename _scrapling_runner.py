@@ -27,9 +27,74 @@ Note: ``str(response)`` is NOT the HTML — it renders a debug repr like
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+import os
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Proxy configuration
+#
+# The plugin reads proxy settings from environment variables (set them in
+# Hermes' .env file, e.g. ~/AppData/Local/hermes/.env):
+#
+#   EXTRACT_PROXY=http://host:port
+#   # or with credentials inline:
+#   EXTRACT_PROXY=http://user:pass@host:port
+#   # optional explicit auth for the static fetcher:
+#   EXTRACT_PROXY_AUTH=user:pass
+#
+# When neither is set, requests go direct (no proxy). The resolved value
+# is memoized per-process — restart the gateway after changing .env.
+# ---------------------------------------------------------------------------
+
+_PROXY_ENV = "EXTRACT_PROXY"
+_PROXY_AUTH_ENV = "EXTRACT_PROXY_AUTH"
+
+_proxy_cache: Optional[Tuple[str, Tuple[str, str] | None]] = None
+
+
+def get_proxy_config() -> Tuple[str, Tuple[str, str] | None]:
+    """Return (proxy_url, proxy_auth) resolved from EXTRACT_PROXY env.
+
+    Returns ("", None) when no proxy is configured (direct connection).
+    Result is memoized — restart the gateway after changing .env.
+    """
+    global _proxy_cache
+    if _proxy_cache is not None:
+        return _proxy_cache
+
+    proxy = os.environ.get(_PROXY_ENV, "").strip()
+    auth: Tuple[str, str] | None = None
+
+    # Credentials can be inline in the URL (http://user:pass@host) or in a
+    # separate EXTRACT_PROXY_AUTH=user:pass variable.
+    if proxy:
+        # Split inline user:pass@ from the URL for the static fetcher's
+        # proxy_auth parameter; dynamic/stealthy accept it inline instead.
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(proxy)
+            if parsed.username and parsed.password:
+                auth = (parsed.username, parsed.password)
+        except Exception:
+            pass
+
+    raw_auth = os.environ.get(_PROXY_AUTH_ENV, "").strip()
+    if not auth and raw_auth and ":" in raw_auth:
+        user, _, pwd = raw_auth.partition(":")
+        auth = (user, pwd)
+
+    _proxy_cache = (proxy, auth)
+    return _proxy_cache
+
+
+def clear_proxy_cache() -> None:
+    """Reset memoized proxy config (used by tests)."""
+    global _proxy_cache
+    _proxy_cache = None
+
 
 # ---------------------------------------------------------------------------
 # Availability
@@ -110,6 +175,19 @@ def fetch_html(
         kwargs["wait_selector"] = wait_selector
     if extra:
         kwargs.update(extra)
+
+    # Apply proxy from EXTRACT_PROXY env (if configured). Explicit per-call
+    # proxy in `extra` wins; otherwise we use the env-configured value.
+    if "proxy" not in kwargs:
+        proxy, proxy_auth = get_proxy_config()
+        if proxy:
+            if mode == "static":
+                kwargs["proxy"] = proxy
+                if proxy_auth:
+                    kwargs["proxy_auth"] = proxy_auth
+            else:
+                # dynamic/stealthy accept str URL or playwright dict.
+                kwargs["proxy"] = proxy
 
     try:
         if mode == "static":

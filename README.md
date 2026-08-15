@@ -109,6 +109,25 @@ the **deferred catalog** (discoverable via `tool_search` →
 (including this one and mmx's tools), at the cost of a larger tool
 schema on every API call.
 
+## Proxy support
+
+The plugin reads a proxy from the `EXTRACT_PROXY` environment variable
+(set it in Hermes' `.env`, e.g. `~/AppData/Local/hermes/.env`):
+
+```bash
+EXTRACT_PROXY=http://127.0.0.1:7890
+# with credentials inline:
+EXTRACT_PROXY=http://user:pass@127.0.0.1:7890
+# or separately (static fetcher):
+EXTRACT_PROXY_AUTH=user:pass
+```
+
+- When set, **all** extraction (web_extract + web_extract_deep, all
+  modes) routes through the proxy.
+- When unset, requests go direct.
+- Restart the gateway after changing `.env` (value is memoized per process).
+- A per-call `proxy` passed in tool arguments overrides the env value.
+
 ## Development
 
 ```bash
