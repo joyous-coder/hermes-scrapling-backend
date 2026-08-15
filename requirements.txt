@@ -1,0 +1,12 @@
+# This plugin imports the scrapling Python library directly inside the
+# Hermes environment. Install it into Hermes' venv, NOT via `uv tool`:
+#
+#     uv pip install --python "C:/Users/<you>/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" "scrapling[all]"
+#
+# The [all] extra pulls in playwright + patchright + nodriver needed by
+# DynamicFetcher / StealthyFetcher. Browsers are downloaded separately:
+#     scrapling install --force
+#     python -m patchright install chromium
+#
+# This file exists so `pip install -r requirements.txt` documents the
+# dependency; hermes plugins install does not auto-install deps.

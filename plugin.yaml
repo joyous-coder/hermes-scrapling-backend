@@ -1,0 +1,14 @@
+name: hermes-scrapling-backend
+version: 0.1.0
+description: "scrapling web extraction backend for Hermes Agent — replaces web_extract with the scrapling Python API (Fetcher, no intermediate files) and adds web_extract_deep, a deep-extraction tool with mode=dynamic (JS rendering via DynamicFetcher) and mode=stealthy (Cloudflare/anti-bot bypass via StealthyFetcher). Requires: pip install 'scrapling[all]' into the Hermes venv."
+author: joyous-coder
+license: MIT
+kind: backend
+# This plugin registers one web-search-provider (extract-only) plus one
+# standalone tool. Selection in config.yaml:
+#   web: extract_backend: "scrapling"
+provides_web_providers:
+  - scrapling
+provides_tools:
+  - web_extract_deep
+requires_env: []
