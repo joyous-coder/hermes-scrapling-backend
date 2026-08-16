@@ -59,10 +59,12 @@ def register(ctx) -> None:
     # Provider — route via web.extract_backend: "scrapling"
     ctx.register_web_search_provider(ScraplingExtractProvider())
 
-    # Standalone tool — appears in the deferred catalog (tool_search).
+    # Standalone tool — grouped with the core web tools (web_search /
+    # web_extract) so tool_search finds it in the web domain. It still
+    # lives in the deferred catalog (non-core tools defer by default).
     ctx.register_tool(
         name="web_extract_deep",
-        toolset="scrapling",
+        toolset="web",
         schema=WEB_EXTRACT_DEEP_SCHEMA,
         handler=_handle_web_extract_deep,
         is_async=True,
