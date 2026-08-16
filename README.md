@@ -78,7 +78,43 @@ Use it when the plain `web_extract` returns incomplete content:
 - `mode="dynamic"` → scrapling `DynamicFetcher` (renders JavaScript)
 - `mode="stealthy"` → scrapling `StealthyFetcher` (evades CF/anti-bot)
 
-Content is returned directly — no files written.
+### Spill-to-disk for large pages
+
+Pages larger than `WEB_EXTRACT_DEEP_INLINE_LIMIT` characters (default
+**50000**) are written to `~/.hermes/cache/web_extract_deep/` and the
+response returns the path + a truncated inline preview (head + tail):
+
+```json
+{
+  "success": true,
+  "url": "https://example.com/big-page",
+  "title": "...",
+  "status": 200,
+  "mode": "dynamic",
+  "output_format": "markdown",
+  "content_length": 182345,
+  "provider": "scrapling",
+  "truncated": true,
+  "inline_limit": 50000,
+  "file_path": "/home/you/.hermes/cache/web_extract_deep/2026-08-17_142301_ab12cd34.md",
+  "note": "Full content (182345 chars) written to <file_path>. Use read_file to load the complete page.",
+  "content": "<head 5000 chars>\n\n... [truncated — 175345 chars omitted, see file] ...\n\n<tail 2000 chars>"
+}
+```
+
+This mirrors Hermes core `web_extract`'s behavior
+(`tools/web_tools.py` `DEFAULT_EXTRACT_CHAR_LIMIT = 15000`), so the
+agent's sandbox isn't bloated by huge HTML/markdown payloads. The full
+content stays on disk and can be paged through with `read_file`.
+
+Tuning:
+
+- `WEB_EXTRACT_DEEP_INLINE_LIMIT` — spill threshold in characters
+  (default `50000`). Lower it for tighter sandbox budgets, raise it for
+  more inline preview.
+- `WEB_EXTRACT_DEEP_CACHE_DIR` — directory for spilled files
+  (default `~/.hermes/cache/web_extract_deep/`). The directory is
+  created on demand.
 
 ## Architecture
 
@@ -88,9 +124,8 @@ hermes-scrapling-backend/
 ├── __init__.py            # register(ctx): provider + web_extract_deep
 ├── _scrapling_runner.py   # fetch_html() — Fetcher/DynamicFetcher/StealthyFetcher
 ├── extract_provider.py    # ScraplingExtractProvider (extract-only)
-├── web_extract_deep.py    # web_extract_deep tool (async, to_thread)
-└── tests/                 # 22 tests
-```
+├── web_extract_deep.py    # web_extract_deep tool (async, to_thread, spill-to-disk)
+└── tests/                 # 22+ tests
 
 **Flat layout** (no sub-packages): the Hermes plugin loader imports only
 `__init__.py` as a single file via `spec_from_file_location`; sibling

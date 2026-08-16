@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -84,3 +85,121 @@ class TestHandler:
         )
         parsed = json.loads(result)
         assert "failed" in parsed["error"]
+
+
+class TestSpillToDisk:
+    """Pages larger than the inline limit are written to disk and the
+    response returns a path + head/tail preview."""
+
+    def test_small_content_returns_inline(self, monkeypatch, tmp_path):
+        """Under the inline limit, content is returned directly."""
+        import web_extract_deep as deep_mod
+
+        monkeypatch.setattr(deep_mod, "CACHE_DIR", tmp_path / "cache")
+
+        def fake_fetch(url, **kwargs):
+            return {
+                "url": url,
+                "mode": "dynamic",
+                "html": "<p>small</p>",
+                "markdown": "small content",
+                "text": "small content",
+                "status": 200,
+                "title": "small",
+            }
+
+        monkeypatch.setattr(deep_mod, "fetch_html", fake_fetch)
+        result = asyncio.run(
+            _handle_web_extract_deep(
+                {"url": "https://small.example/", "output_format": "markdown"}
+            )
+        )
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        assert "truncated" not in parsed  # small → no spill flag
+        assert "file_path" not in parsed
+        assert "small content" in parsed["content"]
+
+    def test_large_content_spills_to_disk(self, monkeypatch, tmp_path):
+        """Over the inline limit, content is written to disk + preview returned."""
+        import web_extract_deep as deep_mod
+
+        monkeypatch.setattr(deep_mod, "CACHE_DIR", tmp_path / "cache")
+        # Lower the threshold so we don't need a giant string in the test
+        monkeypatch.setenv("WEB_EXTRACT_DEEP_INLINE_LIMIT", "100")
+
+        def fake_fetch(url, **kwargs):
+            # Build content larger than the 100-char inline limit
+            big = "x" * 500
+            return {
+                "url": url,
+                "mode": "dynamic",
+                "html": big,
+                "markdown": big,
+                "text": big,
+                "status": 200,
+                "title": "big",
+            }
+
+        monkeypatch.setattr(deep_mod, "fetch_html", fake_fetch)
+        result = asyncio.run(
+            _handle_web_extract_deep(
+                {"url": "https://big.example/", "output_format": "markdown"}
+            )
+        )
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        assert parsed["truncated"] is True
+        assert parsed["inline_limit"] == 100
+        assert parsed["content_length"] == 500
+        assert "file_path" in parsed
+        assert "Use read_file" in parsed["note"]
+
+        # Confirm file was actually written with full content
+        file_path = Path(parsed["file_path"])
+        assert file_path.exists()
+        assert len(file_path.read_text()) == 500
+        # Preview should be much shorter than full content. With 500-char
+        # content the head/tail windows fully cover it, but the preview
+        # still includes truncation marker text and is shorter than a
+        # hypothetical 5000-char head alone would be.
+        assert "[truncated" in parsed["content"]
+        assert len(parsed["content"]) < 5000
+
+    def test_spill_failure_returns_truncated_inline(self, monkeypatch, tmp_path):
+        """If disk write fails (e.g. permission denied), fall back to inline
+        truncation rather than dropping the content entirely."""
+        import web_extract_deep as deep_mod
+
+        # Use a path that cannot be created (parent is a file, not a dir)
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir")
+        monkeypatch.setattr(deep_mod, "CACHE_DIR", blocker / "cache")
+
+        monkeypatch.setenv("WEB_EXTRACT_DEEP_INLINE_LIMIT", "50")
+
+        def fake_fetch(url, **kwargs):
+            big = "y" * 500
+            return {
+                "url": url,
+                "mode": "dynamic",
+                "html": big,
+                "markdown": big,
+                "text": big,
+                "status": 200,
+                "title": "big",
+            }
+
+        monkeypatch.setattr(deep_mod, "fetch_html", fake_fetch)
+        result = asyncio.run(
+            _handle_web_extract_deep(
+                {"url": "https://nobuffer.example/", "output_format": "markdown"}
+            )
+        )
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        assert parsed["truncated"] is True
+        # Should have inline truncation but no file_path
+        assert "file_path" not in parsed
+        assert "spill_error" in parsed
+        assert len(parsed["content"]) == 50

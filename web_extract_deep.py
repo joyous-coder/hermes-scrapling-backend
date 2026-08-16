@@ -20,7 +20,11 @@ Content is returned directly in memory — no intermediate files.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
+import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from tools.registry import tool_error, tool_result
@@ -30,6 +34,20 @@ from _scrapling_runner import fetch_html, is_scrapling_available
 logger = logging.getLogger(__name__)
 
 VALID_MODES = ("dynamic", "stealthy")
+
+# Spill-to-disk threshold: pages larger than this many characters are written
+# to ~/.hermes/cache/web_extract_deep/ and the response returns the path +
+# truncated inline content. Matches the same idea as Hermes core web_extract
+# (which uses 15000), but tuned higher because deep mode is often the
+# fallback when the lightweight web_extract returns empty JS-rendered pages.
+DEFAULT_INLINE_CHAR_LIMIT = 50000
+
+CACHE_DIR = Path(
+    os.environ.get(
+        "WEB_EXTRACT_DEEP_CACHE_DIR",
+        str(Path.home() / ".hermes" / "cache" / "web_extract_deep"),
+    )
+)
 
 WEB_EXTRACT_DEEP_SCHEMA: Dict[str, Any] = {
     "name": "web_extract_deep",
@@ -129,6 +147,15 @@ async def _handle_web_extract_deep(args: Dict[str, Any], **kwargs: Any) -> str:
     else:  # markdown (default)
         content = fetched["markdown"] or fetched["text"] or fetched["html"]
 
+    _env_limit = os.environ.get("WEB_EXTRACT_DEEP_INLINE_LIMIT")
+    if _env_limit is not None:
+        # Explicit override: respect user value, only floor at 1 so tests
+        # can verify exact spill thresholds without the code silently
+        # bumping them up.
+        inline_limit = max(1, int(_env_limit))
+    else:
+        inline_limit = max(1000, DEFAULT_INLINE_CHAR_LIMIT)
+
     payload = {
         "success": True,
         "url": fetched["url"],
@@ -136,8 +163,44 @@ async def _handle_web_extract_deep(args: Dict[str, Any], **kwargs: Any) -> str:
         "status": fetched["status"],
         "mode": fetched["mode"],
         "output_format": output_format,
-        "content": content,
         "content_length": len(content),
         "provider": "scrapling",
     }
+
+    # Large pages spill to disk so the agent's sandbox / context isn't bloated.
+    # Mirrors the spill behavior of Hermes core web_extract (see
+    # tools/web_tools.py DEFAULT_EXTRACT_CHAR_LIMIT).
+    if len(content) > inline_limit:
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            url_hash = hashlib.sha1(fetched["url"].encode("utf-8")).hexdigest()[:12]
+            stamp = time.strftime("%Y-%m-%d_%H%M%S")
+            ext = "html" if output_format == "html" else "md"
+            file_path = CACHE_DIR / f"{stamp}_{url_hash}.{ext}"
+            file_path.write_text(content, encoding="utf-8")
+            head, tail = content[:5000], content[-2000:]
+            truncated = (
+                f"{head}\n\n"
+                f"... [truncated — {len(content) - 7000} chars omitted, see file] ...\n\n"
+                f"{tail}"
+            )
+            payload.update({
+                "content": truncated,
+                "truncated": True,
+                "inline_limit": inline_limit,
+                "file_path": str(file_path),
+                "note": (
+                    f"Full content ({len(content)} chars) written to {file_path}. "
+                    f"Use read_file to load the complete page."
+                ),
+            })
+        except OSError as exc:
+            logger.warning("web_extract_deep spill-to-disk failed for %s: %s",
+                           url, exc)
+            payload["content"] = content[:inline_limit]
+            payload["truncated"] = True
+            payload["spill_error"] = str(exc)
+    else:
+        payload["content"] = content
+
     return tool_result(payload)
