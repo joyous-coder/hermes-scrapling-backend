@@ -163,7 +163,9 @@ class TestSpillToDisk:
         # content the head/tail windows fully cover it, but the preview
         # still includes truncation marker text and is shorter than a
         # hypothetical 5000-char head alone would be.
-        assert "[truncated" in parsed["content"]
+        assert "[... middle omitted" in parsed["content"]
+        assert "Full text saved to:" in parsed["content"]
+        assert "[TRUNCATED]" in parsed["content"]
         assert len(parsed["content"]) < 5000
 
     def test_spill_failure_returns_truncated_inline(self, monkeypatch, tmp_path):

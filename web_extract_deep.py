@@ -168,8 +168,9 @@ async def _handle_web_extract_deep(args: Dict[str, Any], **kwargs: Any) -> str:
     }
 
     # Large pages spill to disk so the agent's sandbox / context isn't bloated.
-    # Mirrors the spill behavior of Hermes core web_extract (see
-    # tools/web_tools.py DEFAULT_EXTRACT_CHAR_LIMIT).
+    # Mirrors Hermes core web_extract's behavior (see tools/web_tools.py
+    # `_truncate_with_footer`) so agents trained on web_extract's footer
+    # format know exactly how to read the omitted middle.
     if len(content) > inline_limit:
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -178,20 +179,47 @@ async def _handle_web_extract_deep(args: Dict[str, Any], **kwargs: Any) -> str:
             ext = "html" if output_format == "html" else "md"
             file_path = CACHE_DIR / f"{stamp}_{url_hash}.{ext}"
             file_path.write_text(content, encoding="utf-8")
-            head, tail = content[:5000], content[-2000:]
-            truncated = (
-                f"{head}\n\n"
-                f"... [truncated — {len(content) - 7000} chars omitted, see file] ...\n\n"
-                f"{tail}"
-            )
+
+            # Mirror web_extract's head/tail split: 75% head + 25% tail,
+            # snapped to newline boundaries so we never slice mid-line.
+            head_budget = int(inline_limit * 0.75)
+            tail_budget = inline_limit - head_budget
+            head = content[:head_budget]
+            tail = content[-tail_budget:]
+            nl = head.rfind("\n")
+            if nl > head_budget * 0.5:
+                head = head[:nl]
+            nl = tail.find("\n")
+            if 0 <= nl < tail_budget * 0.5:
+                tail = tail[nl + 1:]
+
+            # The omitted middle begins right after the head we're showing.
+            # Give the agent a concrete starting line (head line count + 1)
+            # so its first read_file lands in the gap instead of guessing.
+            middle_start_line = head.count("\n") + 2
+
+            footer_lines = [
+                "",
+                "─" * 8 + " [TRUNCATED] " + "─" * 8,
+                f"Showing {len(head):,} chars (head) + {len(tail):,} chars "
+                f"(tail) of {len(content):,} total clean characters.",
+                f"Full text saved to: {file_path}",
+                f'To read the omitted middle: read_file path="{file_path}" '
+                f"offset={middle_start_line} limit=200  (the file is the "
+                "complete page; raise/lower offset to page through it).",
+                "─" * 29,
+            ]
             payload.update({
-                "content": truncated,
+                "content": (
+                    head + "\n\n[... middle omitted — see footer ...]\n\n" + tail
+                    + "\n" + "\n".join(footer_lines)
+                ),
                 "truncated": True,
                 "inline_limit": inline_limit,
                 "file_path": str(file_path),
                 "note": (
-                    f"Full content ({len(content)} chars) written to {file_path}. "
-                    f"Use read_file to load the complete page."
+                    f"Full content ({len(content)} chars) written to "
+                    f"{file_path}. Use read_file to load the complete page."
                 ),
             })
         except OSError as exc:
